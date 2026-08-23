@@ -2,6 +2,7 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { uploadFileToCloudinary } from "../utils/cloudinary.js";
+import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 import prisma from "../db/prisma.js";
 import {
@@ -34,7 +35,6 @@ const generateAccessandRefreshToken = async (user) => {
         throw new ApiError("Error generating tokens", 500);
     }
 };
-
 
 const registerUser = asyncHandler(async (req, res) => {
 
@@ -112,7 +112,6 @@ const registerUser = asyncHandler(async (req, res) => {
     });
 });
 
-
 const loginUser = asyncHandler(async (req, res) => {
 
     const { email, password } = req.body;
@@ -182,7 +181,6 @@ const loginUser = asyncHandler(async (req, res) => {
         );
 });
 
-
 const logoutUser = asyncHandler(async (req, res) => {
 
     await prisma.user.update({
@@ -212,9 +210,251 @@ const logoutUser = asyncHandler(async (req, res) => {
         );
 });
 
+const refreshAccessToken = asyncHandler(async (req, res) => {
+    const incomingRefreshToken = req.cookies.refreshToken;
+
+    if (!incomingRefreshToken) {
+        throw new ApiError("Unauthorized refreshToken", 401);
+    }
+
+    const decodedToken = jwt.verify(
+        incomingRefreshToken,
+        process.env.REFRESH_TOKEN_SECRET
+    );
+
+    if (!decodedToken) {
+        throw new ApiError("Invalid refreshToken", 401);
+    }
+
+    const user = await prisma.user.findUnique({
+        where: {
+            id: decodedToken.id
+        },
+        select: {
+            id: true,
+            email: true,
+            name: true,
+            profilePic: true,
+            refreshToken: true
+        }
+    });
+
+    if (!user) {
+        throw new ApiError("Invalid refreshToken", 401);
+    }
+
+    if (incomingRefreshToken !== user.refreshToken) {
+        throw new ApiError("Invalid refreshToken", 401);
+    }
+
+    const {
+        accessToken,
+        refreshToken
+    } = await generateAccessandRefreshToken(user);
+
+    const options = {
+        httpOnly: true,
+        secure: true
+    };
+
+    return res
+        .status(200)
+        .cookie("refreshToken", refreshToken, options)
+        .cookie("accessToken", accessToken, options)
+        .json(
+            new ApiResponse(
+                200,
+                { accessToken, refreshToken },
+                "Access token refreshed successfully"
+            )
+        );
+});
+
+const getUserProfile = asyncHandler(async (req, res) => {
+   try {const user = await prisma.user.findUnique({
+        where: {
+            id: req.user.id
+        },
+        select: {
+            id: true,
+            email: true,
+            name: true,
+            profilePic: true,
+            createdAt: true,
+            updatedAt: true
+        }
+    });
+
+    return res
+        .status(200)
+        .json(
+            new ApiResponse(
+                200,
+                { user },
+                "User profile retrieved successfully"
+            )
+        );}
+    catch(error){
+        throw new ApiError(400,"cannot fetch user details");
+    }
+});
+
+const updatePassword = asyncHandler(async (req, res) => {
+
+    const { oldpassword, newpassword } = req.body;
+
+    if (!oldpassword || !newpassword) {
+        throw new ApiError("Old password and new password are required", 400);
+    }
+
+    const user = await prisma.user.findUnique({
+        where: {
+            id: req.user.id
+        },
+        select: {
+            id: true,
+            password: true
+        }
+    });
+
+    if (!user) {
+        throw new ApiError("User not found", 404);
+    }
+
+    const isPasswordCorrect = await bcrypt.compare(
+        oldpassword,
+        user.password
+    );
+
+    if (!isPasswordCorrect) {
+        throw new ApiError("Old password is incorrect", 401);
+    }
+
+    const hashedNewPassword = await bcrypt.hash(newpassword, 10);
+
+    await prisma.user.update({
+        where: {
+            id: user.id
+        },
+        data: {
+            password: hashedNewPassword
+        }
+    });
+
+    return res
+        .status(200)
+        .json(
+            new ApiResponse(
+                200,
+                null,
+                "Password updated successfully"
+            )
+        );
+});
+
+const updateUserDetails = asyncHandler(async (req, res) => {
+    const { name, email } = req.body;
+
+    if (!name && !email) {
+        throw new ApiError("Please provide name or email", 400);
+    }
+
+    // If email is being changed, check whether it's already used
+    if (email) {
+        const existingUser = await prisma.user.findUnique({
+            where: {
+                email: email
+            },
+            select: {
+                id: true
+            }
+        });
+
+        if (existingUser && existingUser.id !== req.user.id) {
+            throw new ApiError("Email already in use", 409);
+        }
+    }
+
+    const updatedUser = await prisma.user.update({
+        where: {
+            id: req.user.id
+        },
+        data: {
+            ...(name && { name: name }),
+            ...(email && { email: email })
+        },
+        select: {
+            id: true,
+            email: true,
+            name: true,
+            profilePic: true,
+            createdAt: true,
+            updatedAt: true
+        }
+    });
+
+    return res
+        .status(200)
+        .json(
+            new ApiResponse(
+                200,
+                { user: updatedUser },
+                "User details updated successfully"
+            )
+        );
+});
+
+
+const updateProfilePic = asyncHandler(async (req, res) => {
+
+    const profilePic = req.file?.path;
+
+    if (!profilePic) {
+        throw new ApiError("Please provide a profile picture", 400);
+    }
+
+    const result = await uploadFileToCloudinary(profilePic);
+
+    if (!result?.url) {
+        throw new ApiError("Failed to upload profile picture", 500);
+    }
+
+    const updatedUser = await prisma.user.update({
+        where: {
+            id: req.user.id
+        },
+        data: {
+            profilePic: result.url
+        },
+        select: {
+            id: true,
+            email: true,
+            name: true,
+            profilePic: true,
+            createdAt: true,
+            updatedAt: true
+        }
+    });
+
+    return res
+        .status(200)
+        .json(
+            new ApiResponse(
+                200,
+                { user: updatedUser },
+                "Profile picture updated successfully"
+            )
+        );
+});
+
 
 export {
     registerUser,
     loginUser,
-    logoutUser
+    logoutUser,
+    refreshAccessToken,
+    getUserProfile,
+    updatePassword,
+    updateProfilePic,
+    updateUserDetails
 };
