@@ -3,10 +3,13 @@ const asyncHandler = (fn) => {
     try {
         await fn(req, res, next);
     } catch (error) {
-        res.status(500).json({
-            message:error.message,
-            success:false
-            
+        const statusCode = Number.isInteger(error.statusCode)
+            ? error.statusCode
+            : 500;
+
+        res.status(statusCode).json({
+            message: error.message || "Internal server error",
+            success: false
         });
         
     }   

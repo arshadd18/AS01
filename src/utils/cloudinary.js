@@ -16,10 +16,14 @@ const uploadFileToCloudinary = async (filePath) => {
         resource_type: "auto",
     });
     console.log("File uploaded to Cloudinary:", result.url);
-    fs.unlinkSync(filePath);
+    if (filePath && fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
     return result;
   } catch (error) {
-    fs.unlinkSync(filePath);
+    if (filePath && fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
 
     console.error("Error uploading file to Cloudinary:", error);
     throw error;

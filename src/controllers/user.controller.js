@@ -666,6 +666,6 @@ export {
     updateUserDetails,
     getWalletBalance,
     depositMoney,
-    transferMoney,
+    transferMoneyController,
     getTransactionHistory
 };

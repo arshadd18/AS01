@@ -2,6 +2,7 @@ import prisma from "../db/prisma.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
+import { transferMoney } from "../service/wallet.service.js";
 
 const createConversation = asyncHandler(async (req, res) => {
 
