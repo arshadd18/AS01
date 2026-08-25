@@ -1,4 +1,5 @@
 // 1. Database Connection Configuration
+
 datasource db {
   provider = "postgresql"
 }
@@ -7,79 +8,83 @@ generator client {
   provider = "prisma-client-js"
 }
 
-//2. User Entity
+// 2. User Entity
 
 model User {
-  id               Int           @id @default(autoincrement())
-  email            String        @unique
-  name             String
-  password         String
-  profilePic       String?
-  refreshToken     String?
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
+  id           Int      @id @default(autoincrement())
+  email        String   @unique
+  name         String
+  password     String
+  profilePic   String?
+  refreshToken String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  // Relationships
+  // Existing relationships
   wallet           Wallet?
   groupMemberships GroupMember[]
   billsPaid        Bill[]
   billSplitsOwed   BillSplit[]
   sentTrans        Transaction[] @relation("Sender")
   receivedTrans    Transaction[] @relation("Receiver")
+
+  // Chat relationships
+  conversationMembers ConversationMember[]
+  messages            Message[]
 }
 
-// 3. Wallet Entity (Keeps track of real-time account balances)
+// 3. Wallet Entity
+
 model Wallet {
   id        Int      @id @default(autoincrement())
   userId    Int      @unique
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  // Decimal prevents rounding bugs. 12 digits total, 2 after the dot (e.g. 9999999999.99)
   balance   Decimal  @default(0.00) @db.Decimal(12, 2)
   updatedAt DateTime @updatedAt
 }
 
 // 4. Group Entity
+
 model Group {
-  id        Int           @id @default(autoincrement())
+  id        Int      @id @default(autoincrement())
   name      String
-  createdAt DateTime      @default(now())
-  
-  // Relationships
-  members   GroupMember[]
-  bills     Bill[]
+  createdAt DateTime @default(now())
+
+  members GroupMember[]
+  bills   Bill[]
 }
 
-// 5. GroupMember Entity (Junction table linking Users and Groups)
+// 5. GroupMember Entity
+
 model GroupMember {
   id        Int      @id @default(autoincrement())
   groupId   Int
   userId    Int
   createdAt DateTime @default(now())
 
-  // Relationships
-  group     Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  // Enforces that a user cannot join the same group twice
   @@unique([groupId, userId])
 }
 
-// 6. Bill Entity (Tracks the total amount spent on a group expense)
+// 6. Bill Entity
+
 model Bill {
-  id          Int         @id @default(autoincrement())
+  id          Int      @id @default(autoincrement())
   groupId     Int
   paidById    Int
-  amount      Decimal     @db.Decimal(12, 2)
+  amount      Decimal  @db.Decimal(12, 2)
   description String
-  createdAt   DateTime    @default(now())
-  
-  // Relationships
-  group       Group       @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  paidBy      User        @relation(fields: [paidById], references: [id])
-  splits      BillSplit[]
+  createdAt   DateTime @default(now())
+
+  group  Group       @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  paidBy User        @relation(fields: [paidById], references: [id])
+  splits BillSplit[]
 }
 
-// 7. BillSplit Entity (Tracks exactly how much each individual user owes for a bill)
+// 7. BillSplit Entity
+
 model BillSplit {
   id        Int      @id @default(autoincrement())
   billId    Int
@@ -88,22 +93,70 @@ model BillSplit {
   isPaid    Boolean  @default(false)
   createdAt DateTime @default(now())
 
-  // Relationships
-  bill      Bill     @relation(fields: [billId], references: [id], onDelete: Cascade)
-  user      User     @relation(fields: [userId], references: [id])
+  bill Bill @relation(fields: [billId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id])
 }
 
-// 8. Transaction Entity (Your immutable financial passbook ledger)
+// 8. Transaction Entity
 model Transaction {
   id         Int      @id @default(autoincrement())
-  senderId   Int?     // Nullable for account deposits (no sender)
-  receiverId Int      // The person getting the money
+  senderId   Int?
+  receiverId Int
   amount     Decimal  @db.Decimal(12, 2)
-  type       String   // "DEPOSIT", "P2P_TRANSFER", or "GROUP_SETTLEMENT"
-  status     String   @default("SUCCESS") // "SUCCESS" or "FAILED"
+  type       String
+  status     String   @default("SUCCESS")
   createdAt  DateTime @default(now())
 
-  // Relationships
-  sender     User?    @relation("Sender", fields: [senderId], references: [id])
-  receiver   User     @relation("Receiver", fields: [receiverId], references: [id])
+  sender   User? @relation("Sender", fields: [senderId], references: [id])
+  receiver User  @relation("Receiver", fields: [receiverId], references: [id])
+
+  message Message?
+}
+
+// 9. Message Type
+
+enum MessageType {
+  TEXT
+  MONEY
+}
+
+// 10. Conversation
+
+model Conversation {
+  id        Int      @id @default(autoincrement())
+  createdAt DateTime @default(now())
+
+  members  ConversationMember[]
+  messages Message[]
+}
+
+// 11. Conversation Member
+
+model ConversationMember {
+  id             Int      @id @default(autoincrement())
+  conversationId Int
+  userId         Int
+  joinedAt       DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+}
+
+// 12. Message
+model Message {
+  id             Int         @id @default(autoincrement())
+  conversationId Int
+  senderId       Int
+  type           MessageType
+  content        String?
+  transactionId  Int?        @unique
+  createdAt      DateTime    @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User         @relation(fields: [senderId], references: [id])
+  transaction  Transaction? @relation(fields: [transactionId], references: [id])
+
+  @@index([conversationId, createdAt])
 }

@@ -2,6 +2,7 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { uploadFileToCloudinary } from "../utils/cloudinary.js";
+import { transferMoney } from "../service/wallet.service.js";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 import prisma from "../db/prisma.js";
@@ -538,19 +539,17 @@ const depositMoney = asyncHandler(async (req, res) => {
         )
     );
 });
-const transferMoney = asyncHandler(async (req, res) => {
+const transferMoneyController = asyncHandler(async (req, res) => {
 
     const { receiverId, receiverEmail, amount } = req.body;
+
     const senderId = req.user.id;
 
-    const transferAmount = Number(amount);
-
-    if (!Number.isFinite(transferAmount) || transferAmount <= 0) {
-        throw new ApiError(400, "Please enter a valid amount");
-    }
-
-    if (!receiverEmail && !receiverId) {
-        throw new ApiError(400, "Please provide receiver details");
+    if (!receiverId && !receiverEmail) {
+        throw new ApiError(
+            400,
+            "Please provide receiver details"
+        );
     }
 
     let receiver;
@@ -561,9 +560,7 @@ const transferMoney = asyncHandler(async (req, res) => {
                 id: Number(receiverId)
             },
             select: {
-                id: true,
-                name: true,
-                email: true
+                id: true
             }
         });
     } else {
@@ -572,111 +569,36 @@ const transferMoney = asyncHandler(async (req, res) => {
                 email: receiverEmail
             },
             select: {
-                id: true,
-                name: true,
-                email: true
+                id: true
             }
         });
     }
 
     if (!receiver) {
-        throw new ApiError(404, "Receiver doesn't exist");
-    }
-
-    const receiverUserId = receiver.id;
-
-    if (senderId === receiverUserId) {
-        throw new ApiError(400, "You cannot transfer money to yourself");
-    }
-
-    const senderWallet = await prisma.wallet.findUnique({
-        where: {
-            userId: senderId
-        }
-    });
-
-    if (!senderWallet) {
-        throw new ApiError(404, "Sender wallet not found");
-    }
-
-    if (senderWallet.balance.lt(transferAmount)) {
-        throw new ApiError(400, "Insufficient balance");
-    }
-
-    const receiverWallet = await prisma.wallet.findUnique({
-        where: {
-            userId: receiverUserId
-        }
-    });
-
-    if (!receiverWallet) {
-        throw new ApiError(404, "Receiver wallet not found");
-    }
-
- const result = await prisma.$transaction(async (tx) => {
-
-    // 1. Atomically deduct from sender
-    const sending = await tx.wallet.updateMany({
-        where: {
-            userId: senderId,
-            balance: {
-                gte: transferAmount
-            }
-        },
-        data: {
-            balance: {
-                decrement: transferAmount
-            }
-        }
-    });
-
-    if (sending.count !== 1) {
-        throw new ApiError(400, "Insufficient balance");
-    }
-
-    // 2. Credit receiver
-    const receiving = await tx.wallet.update({
-        where: {
-            userId: receiverUserId
-        },
-        data: {
-            balance: {
-                increment: transferAmount
-            }
-        }
-    });
-
-    // 3. Create ledger entry
-    const transaction = await tx.transaction.create({
-        data: {
-            senderId: senderId,
-            receiverId: receiverUserId,
-            amount: transferAmount,
-            type: "P2P_TRANSFER",
-            status: "SUCCESS"
-        }
-    });
-
-    return {
-        sending,
-        receiving,
-        transaction
-    };
-});
-
-    return res
-        .status(200)
-        .json(
-            new ApiResponse(
-                200,
-                {
-                    receiver,
-                    amount: transferAmount,
-                    transaction: result.transaction
-                },
-                "Amount transferred successfully"
-            )
+        throw new ApiError(
+            404,
+            "Receiver doesn't exist"
         );
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+        return await transferMoney({
+            senderId,
+            receiverId: receiver.id,
+            amount,
+            tx
+        });
+    });
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {
+                transaction: result.transaction
+            },
+            "Amount transferred successfully"
+        )
+    );
 });
 
 const getTransactionHistory = asyncHandler(async (req, res) => {
