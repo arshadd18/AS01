@@ -20,13 +20,17 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  // Existing relationships
-  wallet           Wallet?
+  // Wallet
+  wallet Wallet?
+
+  // Group relationships
   groupMemberships GroupMember[]
   billsPaid        Bill[]
   billSplitsOwed   BillSplit[]
-  sentTrans        Transaction[] @relation("Sender")
-  receivedTrans    Transaction[] @relation("Receiver")
+
+  // Transaction relationships
+  sentTrans     Transaction[] @relation("Sender")
+  receivedTrans Transaction[] @relation("Receiver")
 
   // Chat relationships
   conversationMembers ConversationMember[]
@@ -43,24 +47,34 @@ model Wallet {
   updatedAt DateTime @updatedAt
 }
 
-// 4. Group Entity
+// 4. Group Role
 
-model Group {
-  id        Int      @id @default(autoincrement())
-  name      String
-  createdAt DateTime @default(now())
-
-  members GroupMember[]
-  bills   Bill[]
+enum GroupRole {
+  OWNER
+  MEMBER
 }
 
-// 5. GroupMember Entity
+// 5. Group Entity
+
+model Group {
+  id             Int      @id @default(autoincrement())
+  name           String
+  conversationId Int      @unique
+  createdAt      DateTime @default(now())
+
+  conversation Conversation  @relation(fields: [conversationId], references: [id])
+  members      GroupMember[]
+  bills        Bill[]
+}
+
+// 6. GroupMember Entity
 
 model GroupMember {
-  id        Int      @id @default(autoincrement())
+  id        Int       @id @default(autoincrement())
   groupId   Int
   userId    Int
-  createdAt DateTime @default(now())
+  role      GroupRole @default(MEMBER)
+  createdAt DateTime  @default(now())
 
   group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
   user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -68,7 +82,7 @@ model GroupMember {
   @@unique([groupId, userId])
 }
 
-// 6. Bill Entity
+// 7. Bill Entity
 
 model Bill {
   id          Int      @id @default(autoincrement())
@@ -83,7 +97,7 @@ model Bill {
   splits BillSplit[]
 }
 
-// 7. BillSplit Entity
+// 8. BillSplit Entity
 
 model BillSplit {
   id        Int      @id @default(autoincrement())
@@ -95,9 +109,12 @@ model BillSplit {
 
   bill Bill @relation(fields: [billId], references: [id], onDelete: Cascade)
   user User @relation(fields: [userId], references: [id])
+
+  @@unique([billId, userId])
 }
 
-// 8. Transaction Entity
+// 9. Transaction Entity
+
 model Transaction {
   id         Int      @id @default(autoincrement())
   senderId   Int?
@@ -113,24 +130,27 @@ model Transaction {
   message Message?
 }
 
-// 9. Message Type
+// 10. Message Type
 
 enum MessageType {
   TEXT
   MONEY
 }
 
-// 10. Conversation
+// 11. Conversation Entity
 
 model Conversation {
   id        Int      @id @default(autoincrement())
   createdAt DateTime @default(now())
 
+  // Optional group relationship.
+  // A conversation can exist without a group.
+  group    Group?
   members  ConversationMember[]
   messages Message[]
 }
 
-// 11. Conversation Member
+// 12. Conversation Member
 
 model ConversationMember {
   id             Int      @id @default(autoincrement())
@@ -144,7 +164,8 @@ model ConversationMember {
   @@unique([conversationId, userId])
 }
 
-// 12. Message
+// 13. Message Entity
+
 model Message {
   id             Int         @id @default(autoincrement())
   conversationId Int
