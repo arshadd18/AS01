@@ -15,6 +15,7 @@ app.use(express.static("public"));
 //routes import
 import userRouter from "./routes/user.routes.js";
 import chatRouter from "./routes/chat.routes.js"
+import groupRouter from "./routes/group.routes.js";
 
 
 
@@ -24,6 +25,7 @@ import chatRouter from "./routes/chat.routes.js"
 //routes declaration
 app.use("/users", userRouter);
 app.use("/chat",chatRouter);
+app.use("/group",groupRouter);
 
 
 

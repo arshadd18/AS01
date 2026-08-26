@@ -5,7 +5,7 @@ import { ApiResponse } from "../utils/ApiResponse.js";
 import { transferMoney } from "../service/wallet.service.js";
 
 const createConversation = asyncHandler(async (req, res) => {
-
+//actually this is for only the duo communication and the two people should only have a single conversation 
     const { userId } = req.body;
 
     const currentUserId = req.user.id;
@@ -466,4 +466,68 @@ const getUserConversations = asyncHandler(async (req, res) => {
     );
 });
 
-export { createConversation,sendMessage,ConversationMessages ,sendMoneyMessage,getUserConversations};
+const deleteMessage = asyncHandler(async (req, res) => {
+
+    const { conversationId, messageId } = req.params;
+
+    const userId = req.user.id;
+
+    const message = await prisma.message.findUnique({
+        where: {
+            id: Number(messageId)
+        },
+        select: {
+            id: true,
+            conversationId: true,
+            senderId: true,
+            type: true
+        }
+    });
+
+    if (!message) {
+        throw new ApiError(404, "Message not found");
+    }
+
+    // Make sure the message belongs to this conversation
+    if (message.conversationId !== Number(conversationId)) {
+        throw new ApiError(
+            400,
+            "Message does not belong to this conversation"
+        );
+    }
+
+    // Only the sender can delete their message
+    if (message.senderId !== userId) {
+        throw new ApiError(
+            403,
+            "You can only delete your own messages"
+        );
+    }
+
+    // MONEY messages represent financial transactions
+    if (message.type === "MONEY") {
+        throw new ApiError(
+            400,
+            "Money messages cannot be deleted"
+        );
+    }
+
+    await prisma.message.delete({
+        where: {
+            id: message.id
+        }
+    });
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {},
+            "Message deleted successfully"
+        )
+    );
+});
+
+export { createConversation,sendMessage,ConversationMessages ,sendMoneyMessage,getUserConversations,
+    deleteMessage
+};
+

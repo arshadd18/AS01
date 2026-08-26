@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { authUser } from "../middlewares/auth.middleware.js";
-import { createConversation, ConversationMessages, sendMessage,getUserConversations, sendMoneyMessage } from "../controllers/chat.controller.js";
+import { createConversation, ConversationMessages, sendMessage,getUserConversations, sendMoneyMessage, deleteMessage } from "../controllers/chat.controller.js";
 
 const router = Router();
 
@@ -24,6 +24,10 @@ router.route("/conversation/:conversationId/moneyMessage").post(
 router.route("/conversations").get(
     authUser,
     getUserConversations
+);
+router.route("/conversation/:conversationId/message/:messageId").delete(
+    authUser,
+    deleteMessage
 );
 
 export default router;
