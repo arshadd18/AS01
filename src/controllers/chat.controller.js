@@ -4,6 +4,8 @@ import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { transferMoney } from "../service/wallet.service.js";
 
+
+
 const createConversation = asyncHandler(async (req, res) => {
 //actually this is for only the duo communication and the two people should only have a single conversation 
     const { userId } = req.body;
@@ -29,6 +31,7 @@ const createConversation = asyncHandler(async (req, res) => {
             profilePic: true
         }
     });
+
 
     if (!otherUser) {
         throw new ApiError(404, "User not found");

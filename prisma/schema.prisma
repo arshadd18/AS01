@@ -137,20 +137,32 @@ enum MessageType {
   MONEY
 }
 
-// 11. Conversation Entity
+// 11. Conversation Type
+
+enum ConversationType {
+  DIRECT
+  GROUP
+}
+
+// 12. Conversation Entity
 
 model Conversation {
-  id        Int      @id @default(autoincrement())
-  createdAt DateTime @default(now())
+  id            Int              @id @default(autoincrement())
+  type          ConversationType
+  directUser1Id Int?
+  directUser2Id Int?
+  createdAt     DateTime         @default(now())
 
-  // Optional group relationship.
-  // A conversation can exist without a group.
+  // Optional group relationship
   group    Group?
   members  ConversationMember[]
   messages Message[]
+
+  // Prevent duplicate direct conversations
+  @@unique([directUser1Id, directUser2Id])
 }
 
-// 12. Conversation Member
+// 13. Conversation Member
 
 model ConversationMember {
   id             Int      @id @default(autoincrement())
@@ -164,7 +176,7 @@ model ConversationMember {
   @@unique([conversationId, userId])
 }
 
-// 13. Message Entity
+// 14. Message Entity
 
 model Message {
   id             Int         @id @default(autoincrement())

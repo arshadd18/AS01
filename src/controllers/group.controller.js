@@ -593,22 +593,32 @@ const payBillSplit = asyncHandler(async (req, res) => {
 
     const result = await prisma.$transaction(async (tx) => {
 
-        // 1. Transfer money from split owner to bill payer
+        // 1. Atomically claim the unpaid split
+        const claim = await tx.billSplit.updateMany({
+            where: {
+                id: billSplit.id,
+                userId: userId,
+                isPaid: false
+            },
+            data: {
+                isPaid: true
+            }
+        });
+
+        // Another request may have already paid/claimed it
+        if (claim.count !== 1) {
+            throw new ApiError(
+                400,
+                "Bill split is already paid or cannot be paid"
+            );
+        }
+
+        // 2. Transfer money from split owner to bill payer
         const transfer = await transferMoney({
             senderId: userId,
             receiverId: billSplit.bill.paidById,
             amount: billSplit.share,
             tx
-        });
-
-        // 2. Mark split as paid
-        const updatedSplit = await tx.billSplit.update({
-            where: {
-                id: billSplit.id
-            },
-            data: {
-                isPaid: true
-            }
         });
 
         // 3. Create MONEY message in group conversation
@@ -633,6 +643,13 @@ const payBillSplit = asyncHandler(async (req, res) => {
                         status: true
                     }
                 }
+            }
+        });
+
+        // Fetch the updated split
+        const updatedSplit = await tx.billSplit.findUnique({
+            where: {
+                id: billSplit.id
             }
         });
 

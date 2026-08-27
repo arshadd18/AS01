@@ -38,7 +38,14 @@ app.get("/", (req, res) => {
 
 app.get("/users", async (req, res) => {
   try {
-    const users = await prisma.user.findMany();
+    const users = await prisma.user.findMany({
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        profilePic: true,
+      },
+    });
 
     res.json(users);
   } catch (error) {
@@ -49,5 +56,8 @@ app.get("/users", async (req, res) => {
     });
   }
 });
+
+
+
 
 export { app };
