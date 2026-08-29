@@ -1,11 +1,11 @@
-import prisma from "../db/prisma.js";
-import { ApiError } from "../utils/ApiError.js";
 
+import { ApiError } from "../utils/ApiError.js";
+import { toMoneyDecimal } from "../utils/money.js";
 const transferMoney = async ({
     senderId,
     receiverId,
     amount,
-    tx = prisma
+    tx
 }) => {
 
     if (senderId === receiverId) {
@@ -15,13 +15,15 @@ const transferMoney = async ({
         );
     }
 
-    const transferAmount = Number(amount);
+    let transferAmount;
 
-    if (!Number.isFinite(transferAmount) || transferAmount <= 0) {
-        throw new ApiError(
-            400,
+    try {
+        transferAmount = toMoneyDecimal(
+            amount,
             "Please enter a valid amount"
         );
+    } catch (error) {
+        throw new ApiError(400, error.message);
     }
 
     // Atomically deduct money from sender

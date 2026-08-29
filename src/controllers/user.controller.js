@@ -3,6 +3,7 @@ import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { uploadFileToCloudinary } from "../utils/cloudinary.js";
 import { transferMoney } from "../service/wallet.service.js";
+import { toMoneyDecimal } from "../utils/money.js";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 import prisma from "../db/prisma.js";
@@ -36,7 +37,6 @@ const generateAccessandRefreshToken = async (user) => {
         throw new ApiError("Error generating tokens", 500);
     }
 };
-
 const registerUser = asyncHandler(async (req, res) => {
 
     const { email, password, name } = req.body;
@@ -75,27 +75,27 @@ const registerUser = asyncHandler(async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const user = await prisma.user.create({
-    data: {
-        email: email,
-        password: hashedPassword,
-        name: name,
-        profilePic: url,
-        refreshToken: null,
+        data: {
+            email: email,
+            password: hashedPassword,
+            name: name,
+            profilePic: url,
+            refreshToken: null,
 
-        wallet: {
-            create: {
-                balance: 0
+            wallet: {
+                create: {
+                    balance: 0
+                }
             }
+        },
+        select: {
+            id: true,
+            email: true,
+            name: true,
+            profilePic: true,
+            createdAt: true,
+            updatedAt: true
         }
-    },
-    select: {
-        id: true,
-        email: true,
-        name: true,
-        profilePic: true,
-        createdAt: true,
-        updatedAt: true
-    }
     });
 
     const accessToken = generateAccessToken(user);
@@ -110,12 +110,23 @@ const registerUser = asyncHandler(async (req, res) => {
         }
     });
 
+    // Set tokens in HttpOnly cookies
+    res.cookie("accessToken", accessToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict"
+    });
+
+    res.cookie("refreshToken", refreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict"
+    });
+
     return res.status(201).json({
         message: "User created successfully",
         success: true,
-        user: user,
-        accessToken,
-        refreshToken
+        user: user
     });
 });
 
@@ -305,13 +316,15 @@ const getUserProfile = asyncHandler(async (req, res) => {
         throw new ApiError(400,"cannot fetch user details");
     }
 });
-
 const updatePassword = asyncHandler(async (req, res) => {
 
     const { oldpassword, newpassword } = req.body;
 
     if (!oldpassword || !newpassword) {
-        throw new ApiError("Old password and new password are required", 400);
+        throw new ApiError(
+            "Old password and new password are required",
+            400
+        );
     }
 
     const user = await prisma.user.findUnique({
@@ -334,19 +347,29 @@ const updatePassword = asyncHandler(async (req, res) => {
     );
 
     if (!isPasswordCorrect) {
-        throw new ApiError("Old password is incorrect", 401);
+        throw new ApiError(
+            "Old password is incorrect",
+            401
+        );
     }
 
-    const hashedNewPassword = await bcrypt.hash(newpassword, 10);
+    const hashedNewPassword = await bcrypt.hash(
+        newpassword,
+        10
+    );
 
     await prisma.user.update({
         where: {
             id: user.id
         },
         data: {
-            password: hashedNewPassword
+            password: hashedNewPassword,
+            refreshToken: null
         }
     });
+
+    // Clear the refresh token cookie
+    res.clearCookie("refreshToken");
 
     return res
         .status(200)
@@ -358,7 +381,6 @@ const updatePassword = asyncHandler(async (req, res) => {
             )
         );
 });
-
 const updateUserDetails = asyncHandler(async (req, res) => {
     const { name, email } = req.body;
 
@@ -481,18 +503,22 @@ const getWalletBalance = asyncHandler(async (req, res) => {
         )
     );
 });
-
 const depositMoney = asyncHandler(async (req, res) => {
     const { amount } = req.body;
 
     if (amount === undefined || amount === null) {
-        throw new ApiError("Please provide amount", 400);
+        throw new ApiError(400, "Please provide amount");
     }
 
-    const depositAmount = Number(amount);
+    let depositAmount;
 
-    if (!Number.isFinite(depositAmount) || depositAmount <= 0) {
-        throw new ApiError("Amount must be greater than 0", 400);
+    try {
+        depositAmount = toMoneyDecimal(
+            amount,
+            "Amount must be greater than 0"
+        );
+    } catch (error) {
+        throw new ApiError(400, "Amount must be greater than 0");
     }
 
     const result = await prisma.$transaction(async (tx) => {

@@ -3,6 +3,8 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { transferMoney } from "../service/wallet.service.js";
+import { Prisma } from "@prisma/client";
+import { toMoneyDecimal } from "../utils/money.js";
 const createGroup = asyncHandler(async (req, res) => {
 
     const { name } = req.body;
@@ -13,40 +15,42 @@ const createGroup = asyncHandler(async (req, res) => {
         throw new ApiError(400, "Please provide group name");
     }
 
-   const group = await prisma.$transaction(async (tx) => {
+    const group = await prisma.$transaction(async (tx) => {
 
-    // 1. Create conversation
-    const conversation = await tx.conversation.create({
-        data: {}
+        // 1. Create GROUP conversation
+        const conversation = await tx.conversation.create({
+            data: {
+                type: "GROUP"
+            }
+        });
+
+        // 2. Create group linked to conversation
+        const group = await tx.group.create({
+            data: {
+                name: name.trim(),
+                conversationId: conversation.id
+            }
+        });
+
+        // 3. Add creator as group OWNER
+        await tx.groupMember.create({
+            data: {
+                groupId: group.id,
+                userId: userId,
+                role: "OWNER"
+            }
+        });
+
+        // 4. Add creator to the conversation
+        await tx.conversationMember.create({
+            data: {
+                conversationId: conversation.id,
+                userId: userId
+            }
+        });
+
+        return group;
     });
-
-    // 2. Create group linked to conversation
-    const group = await tx.group.create({
-        data: {
-            name: name.trim(),
-            conversationId: conversation.id
-        }
-    });
-
-    // 3. Add creator as group OWNER
-    await tx.groupMember.create({
-        data: {
-            groupId: group.id,
-            userId: userId,
-            role: "OWNER"
-        }
-    });
-
-    // 4. Add creator to the conversation
-    await tx.conversationMember.create({
-        data: {
-            conversationId: conversation.id,
-            userId: userId
-        }
-    });
-
-    return group;
-});
 
     return res.status(201).json(
         new ApiResponse(
@@ -56,7 +60,6 @@ const createGroup = asyncHandler(async (req, res) => {
         )
     );
 });
-
 
 const addGroupMember = asyncHandler(async (req, res) => {
 
@@ -384,12 +387,22 @@ const createBill = asyncHandler(async (req, res) => {
 
     const userId = req.user.id;
 
-    if (!amount) {
+    if (amount === undefined || amount === null) {
         throw new ApiError(400, "Please provide bill amount");
     }
 
-    if (Number(amount) <= 0) {
-        throw new ApiError(400, "Bill amount must be greater than zero");
+    let billAmount;
+
+    try {
+        billAmount = toMoneyDecimal(
+            amount,
+            "Bill amount must be greater than zero"
+        );
+    } catch (error) {
+        throw new ApiError(
+            400,
+            "Bill amount must be greater than zero"
+        );
     }
 
     if (!description || !description.trim()) {
@@ -430,16 +443,19 @@ const createBill = asyncHandler(async (req, res) => {
         );
     }
 
-    // Check for duplicate users in splits
+    // Check whether bill creator is included in splits
     const splitUserIds = splits.map(
         split => Number(split.userId)
     );
+
     if (splitUserIds.includes(userId)) {
-    throw new ApiError(
-        400,
-        "The bill creator cannot be included in the splits"
-    );
-}
+        throw new ApiError(
+            400,
+            "The bill creator cannot be included in the splits"
+        );
+    }
+
+    // Check for duplicate users in splits
     const uniqueUserIds = new Set(splitUserIds);
 
     if (uniqueUserIds.size !== splitUserIds.length) {
@@ -465,11 +481,16 @@ const createBill = asyncHandler(async (req, res) => {
     }
 
     // Validate every share
-    const hasInvalidShare = splits.some(
-        split => Number(split.share) <= 0
-    );
+    let splitAmounts;
 
-    if (hasInvalidShare) {
+    try {
+        splitAmounts = splits.map(split =>
+            toMoneyDecimal(
+                split.share,
+                "Each split share must be greater than zero"
+            )
+        );
+    } catch (error) {
         throw new ApiError(
             400,
             "Each split share must be greater than zero"
@@ -477,12 +498,12 @@ const createBill = asyncHandler(async (req, res) => {
     }
 
     // Check that splits add up exactly to bill amount
-    const totalSplitAmount = splits.reduce(
-        (total, split) => total + Number(split.share),
-        0
+    const totalSplitAmount = splitAmounts.reduce(
+        (total, share) => total.plus(share),
+        new Prisma.Decimal(0)
     );
 
-    if (totalSplitAmount !== Number(amount)) {
+    if (!totalSplitAmount.equals(billAmount)) {
         throw new ApiError(
             400,
             "Split amounts must add up to the bill amount"
@@ -495,13 +516,13 @@ const createBill = asyncHandler(async (req, res) => {
             data: {
                 groupId: Number(groupId),
                 paidById: userId,
-                amount: amount,
+                amount: billAmount,
                 description: description.trim(),
 
                 splits: {
-                    create: splits.map(split => ({
+                    create: splits.map((split, index) => ({
                         userId: Number(split.userId),
-                        share: split.share
+                        share: splitAmounts[index]
                     }))
                 }
             },
@@ -529,7 +550,6 @@ const createBill = asyncHandler(async (req, res) => {
         )
     );
 });
-
 
 const payBillSplit = asyncHandler(async (req, res) => {
 
@@ -593,10 +613,51 @@ const payBillSplit = asyncHandler(async (req, res) => {
 
     const result = await prisma.$transaction(async (tx) => {
 
-        // 1. Atomically claim the unpaid split
+        // Lock the Bill row.
+        // Bill deletion and BillSplit payment both use
+        // this same lock, so they cannot race each other.
+        await tx.$queryRaw`
+            SELECT id
+            FROM "Bill"
+            WHERE id = ${billSplit.billId}
+            FOR UPDATE
+        `;
+
+        // Re-check the split after acquiring the Bill lock
+        const currentSplit = await tx.billSplit.findUnique({
+            where: {
+                id: billSplit.id
+            },
+            select: {
+                id: true,
+                userId: true,
+                share: true,
+                isPaid: true
+            }
+        });
+
+        if (!currentSplit) {
+            throw new ApiError(404, "Bill split not found");
+        }
+
+        if (currentSplit.userId !== userId) {
+            throw new ApiError(
+                403,
+                "You can only pay your own bill split"
+            );
+        }
+
+        if (currentSplit.isPaid) {
+            throw new ApiError(
+                400,
+                "Bill split is already paid"
+            );
+        }
+
+        // Atomically claim the unpaid split
         const claim = await tx.billSplit.updateMany({
             where: {
-                id: billSplit.id,
+                id: currentSplit.id,
                 userId: userId,
                 isPaid: false
             },
@@ -605,7 +666,6 @@ const payBillSplit = asyncHandler(async (req, res) => {
             }
         });
 
-        // Another request may have already paid/claimed it
         if (claim.count !== 1) {
             throw new ApiError(
                 400,
@@ -613,15 +673,15 @@ const payBillSplit = asyncHandler(async (req, res) => {
             );
         }
 
-        // 2. Transfer money from split owner to bill payer
+        // Transfer money from split owner to bill payer
         const transfer = await transferMoney({
             senderId: userId,
             receiverId: billSplit.bill.paidById,
-            amount: billSplit.share,
+            amount: currentSplit.share,
             tx
         });
 
-        // 3. Create MONEY message in group conversation
+        // Create MONEY message in group conversation
         const message = await tx.message.create({
             data: {
                 conversationId:
@@ -649,7 +709,7 @@ const payBillSplit = asyncHandler(async (req, res) => {
         // Fetch the updated split
         const updatedSplit = await tx.billSplit.findUnique({
             where: {
-                id: billSplit.id
+                id: currentSplit.id
             }
         });
 
@@ -779,14 +839,7 @@ const deleteBill = asyncHandler(async (req, res) => {
         },
         select: {
             id: true,
-            paidById: true,
-
-            splits: {
-                select: {
-                    id: true,
-                    isPaid: true
-                }
-            }
+            paidById: true
         }
     });
 
@@ -802,22 +855,43 @@ const deleteBill = asyncHandler(async (req, res) => {
         );
     }
 
-    // A bill cannot be deleted if any split has already been paid
-    const hasPaidSplit = bill.splits.some(
-        split => split.isPaid
-    );
+    await prisma.$transaction(async (tx) => {
 
-    if (hasPaidSplit) {
-        throw new ApiError(
-            400,
-            "Cannot delete a bill with paid splits"
-        );
-    }
+        // Lock the Bill row.
+        // payBillSplit() uses the exact same lock.
+        await tx.$queryRaw`
+            SELECT id
+            FROM "Bill"
+            WHERE id = ${bill.id}
+            FOR UPDATE
+        `;
 
-    await prisma.bill.delete({
-        where: {
-            id: bill.id
+        // Re-check for paid splits after acquiring the lock
+        const paidSplit = await tx.billSplit.findFirst({
+            where: {
+                billId: bill.id,
+                isPaid: true
+            },
+            select: {
+                id: true
+            }
+        });
+
+        if (paidSplit) {
+            throw new ApiError(
+                400,
+                "Cannot delete a bill with paid splits"
+            );
         }
+
+        // Delete the bill.
+        // BillSplit records are deleted automatically because
+        // Bill -> BillSplit uses onDelete: Cascade.
+        await tx.bill.delete({
+            where: {
+                id: bill.id
+            }
+        });
     });
 
     return res.status(200).json(
@@ -828,5 +902,4 @@ const deleteBill = asyncHandler(async (req, res) => {
         )
     );
 });
-
 export { createGroup ,addGroupMember,updateGroupMemberRole,removeGroupMember,createBill,payBillSplit,getGroupDetails,deleteBill};

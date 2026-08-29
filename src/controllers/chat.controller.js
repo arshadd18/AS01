@@ -5,9 +5,9 @@ import { ApiResponse } from "../utils/ApiResponse.js";
 import { transferMoney } from "../service/wallet.service.js";
 
 
-
 const createConversation = asyncHandler(async (req, res) => {
-//actually this is for only the duo communication and the two people should only have a single conversation 
+    // This endpoint is ONLY for direct (1-to-1) communication
+
     const { userId } = req.body;
 
     const currentUserId = req.user.id;
@@ -16,13 +16,18 @@ const createConversation = asyncHandler(async (req, res) => {
         throw new ApiError(400, "Please provide userId");
     }
 
-    if (currentUserId === Number(userId)) {
-        throw new ApiError(400, "You cannot create a conversation with yourself");
+    const otherUserId = Number(userId);
+
+    if (currentUserId === otherUserId) {
+        throw new ApiError(
+            400,
+            "You cannot create a conversation with yourself"
+        );
     }
 
     const otherUser = await prisma.user.findUnique({
         where: {
-            id: Number(userId)
+            id: otherUserId
         },
         select: {
             id: true,
@@ -32,30 +37,22 @@ const createConversation = asyncHandler(async (req, res) => {
         }
     });
 
-
     if (!otherUser) {
         throw new ApiError(404, "User not found");
     }
 
-    // Check whether a conversation already exists
-    const existingConversation = await prisma.conversation.findFirst({
+    // Normalize the two user IDs so that
+    // (2,3) and (3,2) always represent the same pair
+    const directUser1Id = Math.min(currentUserId, otherUser.id);
+    const directUser2Id = Math.max(currentUserId, otherUser.id);
+
+    // Check whether a DIRECT conversation already exists
+    const existingConversation = await prisma.conversation.findUnique({
         where: {
-            AND: [
-                {
-                    members: {
-                        some: {
-                            userId: currentUserId
-                        }
-                    }
-                },
-                {
-                    members: {
-                        some: {
-                            userId: otherUser.id
-                        }
-                    }
-                }
-            ]
+            directUser1Id_directUser2Id: {
+                directUser1Id,
+                directUser2Id
+            }
         },
         include: {
             members: {
@@ -83,9 +80,13 @@ const createConversation = asyncHandler(async (req, res) => {
         );
     }
 
-    // Create a new conversation
+    // Create a new DIRECT conversation
     const conversation = await prisma.conversation.create({
         data: {
+            type: "DIRECT",
+            directUser1Id,
+            directUser2Id,
+
             members: {
                 create: [
                     {
